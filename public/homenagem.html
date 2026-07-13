@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Memoris — Sua Homenagem</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,700;1,500;1,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%; overflow:hidden; background:#0D0806; font-family:'Inter',sans-serif;}
+  #app{width:100vw; height:100vh; position:relative; display:flex; align-items:center; justify-content:center;}
+
+  /* loading */
+  #loading{text-align:center; color:#F2E6D8;}
+  .spinner{width:36px; height:36px; border:2px solid rgba(242,230,216,.15); border-top-color:#C8A87A; border-radius:50%; animation:spin .8s linear infinite; margin:0 auto 16px;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  #loading p{font-family:'Playfair Display',serif; font-style:italic; font-size:15px; color:rgba(242,230,216,.6);}
+
+  /* erro */
+  #erro{display:none; text-align:center; color:#F2E6D8; padding:40px;}
+  #erro h1{font-family:'Playfair Display',serif; font-size:22px; margin-bottom:10px;}
+  #erro p{color:rgba(242,230,216,.5); font-size:14px;}
+
+  /* player */
+  #playerWrap{display:none; width:100%; height:100%; max-width:520px; position:relative;}
+  #canvas{width:100%; height:100%; display:block; object-fit:contain;}
+
+  /* controle inicial (tap pra começar, autoplay bloqueado em alguns navegadores) */
+  #startOverlay{
+    position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:rgba(0,0,0,.55); cursor:pointer; z-index:10; text-align:center; padding:24px;
+  }
+  #startOverlay.hide{display:none;}
+  .play-btn{
+    width:72px; height:72px; border-radius:50%; background:rgba(255,255,255,.12);
+    border:1.5px solid rgba(255,255,255,.35); display:flex; align-items:center; justify-content:center;
+    margin-bottom:20px; backdrop-filter:blur(6px);
+  }
+  #startOverlay h2{font-family:'Playfair Display',serif; font-style:italic; font-size:20px; color:#fff; margin-bottom:6px;}
+  #startOverlay p{font-size:12.5px; color:rgba(255,255,255,.5);}
+
+  /* marca d'água discreta */
+  .watermark{position:absolute; bottom:14px; right:16px; font-size:9px; color:rgba(255,255,255,.18); letter-spacing:.08em; text-transform:uppercase; z-index:5;}
+</style>
+</head>
+<body>
+
+<div id="app">
+
+  <div id="loading">
+    <div class="spinner"></div>
+    <p>Preparando sua homenagem...</p>
+  </div>
+
+  <div id="erro">
+    <h1>Homenagem não encontrada</h1>
+    <p>O link pode estar incorreto ou o pedido ainda não foi confirmado.</p>
+  </div>
+
+  <div id="playerWrap">
+    <canvas id="canvas"></canvas>
+    <div id="startOverlay">
+      <div class="play-btn">
+        <svg viewBox="0 0 24 24" fill="white" width="26" height="26"><path d="M8 5v14l11-7z"/></svg>
+      </div>
+      <h2 id="startTitle">Toque para reviver essa história</h2>
+      <p>Feito com carinho, especialmente para você</p>
+    </div>
+    <div class="watermark">MEMORIS</div>
+  </div>
+
+</div>
+
+<script>
+const API_BASE = window.location.origin.includes('localhost')
+  ? 'http://localhost:3000'
+  : 'https://memoris-backend-production-f440.up.railway.app';
+
+// pega o ID da URL: /homenagem/ID
+const pedidoId = window.location.pathname.split('/homenagem/')[1];
+
+async function init() {
+  if (!pedidoId) return mostrarErro();
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/pedidos/${pedidoId}/publico`);
+    if (!resp.ok) throw new Error('Pedido não encontrado');
+    const dados = await resp.json();
+    montarPlayer(dados);
+  } catch (err) {
+    console.error(err);
+    mostrarErro();
+  }
+}
+
+function mostrarErro() {
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('erro').style.display = 'block';
+}
+
+function daysSince(dataInicio) {
+  if (!dataInicio) return null;
+  const inicio = new Date(dataInicio + 'T00:00:00');
+  return Math.floor((Date.now() - inicio.getTime()) / 86400000);
+}
+
+async function montarPlayer(dados) {
+  document.getElementById('loading').style.display = 'none';
+  const wrap = document.getElementById('playerWrap');
+  wrap.style.display = 'block';
+
+  const names     = `${dados.nomePai} & ${dados.nomeFilho}`;
+  const musicName = dados.musica || null;
+  const days      = daysSince(dados.dataInicio);
+  const heroLabel = dados.maeSolo ? 'DIAS SENDO MINHA HEROÍNA' : 'DIAS SENDO MEU HERÓI';
+  const mensagem  = dados.mensagem || 'Feliz Dia dos Pais.';
+  const fotos     = dados.fotos || [];
+
+  document.getElementById('startTitle').textContent = `Toque para reviver a história de ${names}`;
+
+  if (fotos.length === 0) return mostrarErro();
+
+  const imgs = await Promise.all(fotos.map(src => new Promise(res => {
+    const im = new Image(); im.onload = () => res(im); im.src = src;
+  })));
+
+  const canvas = document.getElementById('canvas');
+  const W = 480, H = 860;
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  function drawCover(img, w, h, alpha) {
+    if (!img) return;
+    ctx.globalAlpha = alpha;
+    const ir = img.width / img.height, cr = w / h;
+    let sw, sh, sx, sy;
+    if (ir > cr) { sh = img.height; sw = sh * cr; sy = 0; sx = (img.width - sw) / 2; }
+    else { sw = img.width; sh = sw / cr; sx = 0; sy = (img.height - sh) / 2; }
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+    ctx.globalAlpha = 1;
+  }
+
+  function wrapText(text, maxWidth) {
+    const words = text.split(' '); const lines = []; let line = '';
+    words.forEach(word => {
+      const test = line ? line + ' ' + word : word;
+      if (ctx.measureText(test).width > maxWidth && line) { lines.push(line); line = word; }
+      else { line = test; }
+    });
+    if (line) lines.push(line);
+    return lines;
+  }
+
+  function drawFrame(elapsed) {
+    const pad = Math.round(W * 0.055);
+    let cy = pad;
+
+    ctx.fillStyle = '#1A0F0A';
+    ctx.fillRect(0, 0, W, H);
+
+    // label música
+    ctx.textAlign = 'left';
+    ctx.font = `600 ${Math.round(W*0.028)}px Inter, sans-serif`;
+    ctx.fillStyle = '#D8B795';
+    ctx.fillText('A MÚSICA DA NOSSA HISTÓRIA', pad, cy + Math.round(W*0.032));
+    cy += Math.round(W*0.048);
+
+    if (musicName) {
+      ctx.font = `500 ${Math.round(W*0.032)}px Inter, sans-serif`;
+      ctx.fillStyle = '#FFFFFF';
+      const title = musicName.length > 38 ? musicName.slice(0,38)+'…' : musicName;
+      ctx.fillText('♪  ' + title, pad, cy + Math.round(W*0.034));
+    }
+    cy += Math.round(W*0.054);
+
+    // foto
+    const perPhoto = 5000, fadeWindow = 0.28;
+    const idx = Math.min(Math.floor(elapsed / perPhoto) % imgs.length, imgs.length - 1);
+    const nextIdx = (idx + 1) % imgs.length;
+    const within = (elapsed % perPhoto) / perPhoto;
+    const fadeAlpha = within > (1 - fadeWindow) ? (within - (1-fadeWindow)) / fadeWindow : 0;
+
+    const photoH = Math.round(W * 0.9);
+    const photoW = W - pad*2;
+    const photoX = pad, photoY = cy;
+    const radius = Math.round(W * 0.025);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(photoX+radius, photoY);
+    ctx.lineTo(photoX+photoW-radius, photoY);
+    ctx.arcTo(photoX+photoW, photoY, photoX+photoW, photoY+radius, radius);
+    ctx.lineTo(photoX+photoW, photoY+photoH-radius);
+    ctx.arcTo(photoX+photoW, photoY+photoH, photoX+photoW-radius, photoY+photoH, radius);
+    ctx.lineTo(photoX+radius, photoY+photoH);
+    ctx.arcTo(photoX, photoY+photoH, photoX, photoY+photoH-radius, radius);
+    ctx.lineTo(photoX, photoY+radius);
+    ctx.arcTo(photoX, photoY, photoX+radius, photoY, radius);
+    ctx.closePath();
+    ctx.clip();
+
+    drawCover(imgs[idx], photoW, photoH, 1);
+    ctx.translate(photoX, photoY);
+    drawCoverAt(imgs[idx], photoW, photoH, 1);
+    if (fadeAlpha > 0) drawCoverAt(imgs[nextIdx], photoW, photoH, fadeAlpha);
+    ctx.translate(-photoX, -photoY);
+
+    const gBot = ctx.createLinearGradient(0, photoY+photoH*0.55, 0, photoY+photoH);
+    gBot.addColorStop(0, 'rgba(10,6,4,0)');
+    gBot.addColorStop(1, 'rgba(10,6,4,.82)');
+    ctx.fillStyle = gBot;
+    ctx.fillRect(photoX, photoY, photoW, photoH);
+    ctx.restore();
+
+    ctx.font = `italic 600 ${Math.round(W*0.052)}px Georgia, serif`;
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'left';
+    ctx.fillText(names, photoX + Math.round(W*0.04), photoY+photoH - Math.round(W*0.04));
+
+    cy = photoY + photoH + Math.round(W*0.04);
+
+    // caixa contador
+    const boxH = Math.round(W*0.22);
+    ctx.fillStyle = 'rgba(255,255,255,.07)';
+    roundRect(pad, cy, W-pad*2, boxH, Math.round(W*0.02));
+    ctx.fill();
+
+    ctx.textAlign = 'center';
+    ctx.font = `bold ${Math.round(W*0.11)}px Georgia, serif`;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(days !== null ? days.toLocaleString('pt-BR') : '—', W/2, cy + Math.round(boxH*0.62));
+    ctx.font = `600 ${Math.round(W*0.028)}px Inter, sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,.85)';
+    ctx.fillText(heroLabel, W/2, cy + Math.round(boxH*0.88));
+
+    cy += boxH + Math.round(W*0.04);
+
+    ctx.font = `italic 500 ${Math.round(W*0.038)}px Georgia, serif`;
+    ctx.fillStyle = 'rgba(255,255,255,.88)';
+    ctx.textAlign = 'center';
+    const lines = wrapText(mensagem, W - pad*2);
+    const lh = Math.round(W*0.048);
+    lines.forEach((l,i) => ctx.fillText(l, W/2, cy + lh*(i+1)));
+  }
+
+  function drawCoverAt(img, w, h, alpha) {
+    if (!img) return;
+    ctx.globalAlpha = alpha;
+    const ir = img.width/img.height, cr = w/h;
+    let sw, sh, sx, sy;
+    if (ir > cr) { sh = img.height; sw = sh*cr; sy = 0; sx = (img.width-sw)/2; }
+    else { sw = img.width; sh = sw/cr; sx = 0; sy = (img.height-sh)/2; }
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+    ctx.globalAlpha = 1;
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x+r, y);
+    ctx.lineTo(x+w-r, y);
+    ctx.arcTo(x+w, y, x+w, y+r, r);
+    ctx.lineTo(x+w, y+h-r);
+    ctx.arcTo(x+w, y+h, x+w-r, y+h, r);
+    ctx.lineTo(x+r, y+h);
+    ctx.arcTo(x, y+h, x, y+h-r, r);
+    ctx.lineTo(x, y+r);
+    ctx.arcTo(x, y, x+r, y, r);
+    ctx.closePath();
+  }
+
+  let startTime = null;
+  function loop(now) {
+    if (!startTime) startTime = now;
+    drawFrame(now - startTime);
+    requestAnimationFrame(loop);
+  }
+
+  // primeiro frame parado antes de tocar
+  drawFrame(0);
+
+  const overlay = document.getElementById('startOverlay');
+  overlay.addEventListener('click', () => {
+    overlay.classList.add('hide');
+    requestAnimationFrame(loop);
+  }, { once: true });
+}
+
+init();
+</script>
+</body>
+</html>
